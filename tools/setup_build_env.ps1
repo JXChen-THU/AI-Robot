@@ -1,34 +1,39 @@
 # ============================================================================
-#  setup_build_env.ps1 -- install a standalone arduino-cli toolchain for this
-#  project (so you can verify "does it compile" without opening Arduino IDE).
+#  setup_build_env.ps1 -- install a standalone arduino-cli toolchain so you can
+#  verify "does it compile" without opening the Arduino IDE.
 #
-#  SAFETY: this script writes ONLY inside <project>\.toolchain\ (on the same
-#  drive as the project). It does NOT touch C:, the registry, PATH, or your
-#  existing Arduino IDE. Deleting the .toolchain folder undoes everything.
-##  Everything goes into .toolchain\ (git-ignored), it never touches your
-#  existing Arduino IDE installation.
+#  SAFETY: everything (cli, config, packages, libraries, temp files) stays inside
+#  the target folder. It does NOT touch C:, the registry, PATH, or an existing
+#  Arduino IDE. Deleting the target folder undoes everything.
 #
 #  Usage (from project root):
 #     powershell -ExecutionPolicy Bypass -File tools\setup_build_env.ps1
+#     powershell -ExecutionPolicy Bypass -File tools\setup_build_env.ps1 -TargetDir D:\ArduinoToolchain
 #
 #  NOTE: ASCII only on purpose -- Windows PowerShell 5.1 reads BOM-less UTF-8
 #        files as ANSI and chokes on non-ASCII characters.
 # ============================================================================
+param(
+  [string]$TargetDir = ''
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$tc   = Join-Path $root '.toolchain'
-$cfg  = Join-Path $tc 'arduino-cli.yaml'
-$cli  = Join-Path $tc 'arduino-cli.exe'
+if ([string]::IsNullOrWhiteSpace($TargetDir)) { $TargetDir = Join-Path $root '.toolchain' }
+$tc  = [IO.Path]::GetFullPath($TargetDir)
+$cfg = Join-Path $tc 'arduino-cli.yaml'
+$cli = Join-Path $tc 'arduino-cli.exe'
 $coreVersion = '3.0.7'
 $espUrl = 'https://espressif.github.io/arduino-esp32/package_esp32_index.json'
 
 New-Item -ItemType Directory -Force -Path $tc | Out-Null
 
-# arduino-cli needs a writable temp dir; keep it inside the project so it works
-# even when the system TEMP is locked down.
+# Keep every temp file inside the target folder (never C:).
 $env:TEMP = Join-Path $tc 'tmp'
 $env:TMP  = $env:TEMP
 New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+
+Write-Host "target dir : $tc"
+Write-Host "temp dir   : $env:TEMP"
 
 # --- 1. download arduino-cli ------------------------------------------------
 if (-not (Test-Path $cli)) {
@@ -56,17 +61,25 @@ ACLI version
 # --- 3. esp32 core ----------------------------------------------------------
 Write-Host "[3/5] updating index (espressif) ..."
 ACLI core update-index --additional-urls $espUrl
-Write-Host "[3/5] installing esp32:esp32@$coreVersion (about 250MB) ..."
+Write-Host "[3/5] installing esp32:esp32@$coreVersion (about 250MB download) ..."
 ACLI core install "esp32:esp32@$coreVersion" --additional-urls $espUrl
 
-# --- 4. libraries -----------------------------------------------------------
-$installed = (ACLI core list) -join "
-"
+$installed = (ACLI core list 2>&1) -join "`n"
 if ($installed -notmatch 'esp32:esp32') { throw "esp32 core install FAILED (see log above)" }
 Write-Host "[3/5] core OK"
 
-Write-Host "[4/5] installing libraries ..."
-foreach ($lib in 'TFT_eSPI','ESP32Servo','ArduinoJson','ESP32-audioI2S') {
+# --- 4. libraries -----------------------------------------------------------
+Write-Host "[4/5] installing libraries (pinned versions) ..."
+# These exact versions are the ones that were actually verified to compile with
+# core 3.0.7. Note: the audio library is published as "ESP32-audioI2S-master";
+# 4.x requires core 3.3.x (it uses IDF 5.4 APIs), so 3.0.13 is the right pair.
+$libs = @(
+  'TFT_eSPI@2.5.43',
+  'ESP32Servo@3.2.1',
+  'ArduinoJson@7.4.3',
+  'ESP32-audioI2S-master@3.0.13'
+)
+foreach ($lib in $libs) {
   ACLI lib install $lib
 }
 
@@ -81,5 +94,8 @@ if (Test-Path $tftDir) {
 }
 
 Write-Host ""
-Write-Host "DONE. Compile example:"
-Write-Host "  & '$cli' --config-file '$cfg' compile --fqbn esp32:esp32:esp32s3 firmware\01_display"
+Write-Host "DONE."
+Write-Host "  cli     = $cli"
+Write-Host "  config  = $cfg"
+Write-Host "  compile example:"
+Write-Host "    & '$cli' --config-file '$cfg' compile --fqbn esp32:esp32:esp32s3 firmware\01_display"
