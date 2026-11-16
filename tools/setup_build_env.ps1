@@ -2,7 +2,10 @@
 #  setup_build_env.ps1 -- install a standalone arduino-cli toolchain for this
 #  project (so you can verify "does it compile" without opening Arduino IDE).
 #
-#  Everything goes into .toolchain\ (git-ignored), it never touches your
+#  SAFETY: this script writes ONLY inside <project>\.toolchain\ (on the same
+#  drive as the project). It does NOT touch C:, the registry, PATH, or your
+#  existing Arduino IDE. Deleting the .toolchain folder undoes everything.
+##  Everything goes into .toolchain\ (git-ignored), it never touches your
 #  existing Arduino IDE installation.
 #
 #  Usage (from project root):
@@ -20,6 +23,12 @@ $coreVersion = '3.0.7'
 $espUrl = 'https://espressif.github.io/arduino-esp32/package_esp32_index.json'
 
 New-Item -ItemType Directory -Force -Path $tc | Out-Null
+
+# arduino-cli needs a writable temp dir; keep it inside the project so it works
+# even when the system TEMP is locked down.
+$env:TEMP = Join-Path $tc 'tmp'
+$env:TMP  = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 
 # --- 1. download arduino-cli ------------------------------------------------
 if (-not (Test-Path $cli)) {
@@ -40,20 +49,25 @@ directories:
   user: $(Join-Path $tc 'user')
 "@ | Set-Content -Path $cfg -Encoding ASCII
 
-function CLI { & $cli --config-file $cfg @args }
+function ACLI { & $cli --config-file $cfg @args }
 Write-Host "[2/5] arduino-cli version:"
-CLI version
+ACLI version
 
 # --- 3. esp32 core ----------------------------------------------------------
 Write-Host "[3/5] updating index (espressif) ..."
-CLI core update-index --additional-urls $espUrl
+ACLI core update-index --additional-urls $espUrl
 Write-Host "[3/5] installing esp32:esp32@$coreVersion (about 250MB) ..."
-CLI core install "esp32:esp32@$coreVersion" --additional-urls $espUrl
+ACLI core install "esp32:esp32@$coreVersion" --additional-urls $espUrl
 
 # --- 4. libraries -----------------------------------------------------------
+$installed = (ACLI core list) -join "
+"
+if ($installed -notmatch 'esp32:esp32') { throw "esp32 core install FAILED (see log above)" }
+Write-Host "[3/5] core OK"
+
 Write-Host "[4/5] installing libraries ..."
 foreach ($lib in 'TFT_eSPI','ESP32Servo','ArduinoJson','ESP32-audioI2S') {
-  CLI lib install $lib
+  ACLI lib install $lib
 }
 
 # --- 5. TFT_eSPI User_Setup ------------------------------------------------
